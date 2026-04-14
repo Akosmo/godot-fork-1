@@ -16,7 +16,7 @@
 		<method name="_get_bar_beats" qualifiers="virtual const">
 			<return type="int" />
 			<description>
-				Override this method to return the bar beats of this stream.
+				Override this method to customize the return value of beats per bar of this stream.
 			</description>
 		</method>
 		<method name="_get_beat_count" qualifiers="virtual const">
