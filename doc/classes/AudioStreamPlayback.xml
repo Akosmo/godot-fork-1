@@ -4,7 +4,7 @@
 		Meta class for playing back audio.
 	</brief_description>
 	<description>
-		Can play, loop, pause a scroll through audio. See [AudioStream] and [AudioStreamOggVorbis] for usage.
+		This class is used to configure and control playback of an [AudioStream] resource. An existing playback instance can be obtained by calling the [method AudioStreamPlayer.get_stream_playback], [method AudioStreamPlayer2D.get_stream_playback] or [method AudioStreamPlayer3D.get_stream_playback] methods. A new one can be created from an audio stream by calling [method AudioStream.instantiate_playback].
 	</description>
 	<tutorials>
 		<link title="Audio Generator Demo">https://godotengine.org/asset-library/asset/2759</link>
@@ -20,13 +20,13 @@
 			<return type="Variant" />
 			<param index="0" name="name" type="StringName" />
 			<description>
-				Return the current value of a playback parameter by name (see [method AudioStream._get_parameter_list]).
+				Overridable method. Should return the current value of a playback parameter by [param name] (see [method AudioStream._get_parameter_list]).
 			</description>
 		</method>
 		<method name="_get_playback_position" qualifiers="virtual required const">
 			<return type="float" />
 			<description>
-				Overridable method. Should return the current progress along the audio stream, in seconds.
+				Overridable method. Should return the current position in the audio stream, in seconds. Some built-in playbacks always return [code]0.0[/code].
 			</description>
 		</method>
 		<method name="_is_playing" qualifiers="virtual required const">
@@ -41,7 +41,7 @@
 			<param index="1" name="rate_scale" type="float" />
 			<param index="2" name="frames" type="int" />
 			<description>
-				Override this method to customize how the audio stream is mixed. This method is called even if the playback is not active.
+				Override this method to customize how the audio stream is mixed. This method is called even if the playback is not active. See [method mix_audio].
 				[b]Note:[/b] It is not useful to override this method in GDScript or C#. Only GDExtension can take advantage of it.
 			</description>
 		</method>
@@ -57,7 +57,7 @@
 			<param index="0" name="name" type="StringName" />
 			<param index="1" name="value" type="Variant" />
 			<description>
-				Set the current value of a playback parameter by name (see [method AudioStream._get_parameter_list]).
+				Set the current value of a playback parameter by [param name] (see [method AudioStream._get_parameter_list]).
 			</description>
 		</method>
 		<method name="_start" qualifiers="virtual required">
@@ -82,13 +82,13 @@
 		<method name="get_loop_count" qualifiers="const">
 			<return type="int" />
 			<description>
-				Returns the number of times the stream has looped.
+				Returns the number of times the audio stream has looped.
 			</description>
 		</method>
 		<method name="get_playback_position" qualifiers="const">
 			<return type="float" />
 			<description>
-				Returns the current position in the stream, in seconds.
+				Returns the current position in the audio stream, in seconds.
 			</description>
 		</method>
 		<method name="get_sample_playback" qualifiers="const" experimental="">
@@ -100,7 +100,7 @@
 		<method name="is_playing" qualifiers="const">
 			<return type="bool" />
 			<description>
-				Returns [code]true[/code] if the stream is playing.
+				Returns [code]true[/code] if the playback is active and playing its audio stream.
 			</description>
 		</method>
 		<method name="mix_audio">
@@ -117,7 +117,7 @@
 			<return type="void" />
 			<param index="0" name="time" type="float" default="0.0" />
 			<description>
-				Seeks the stream at the given [param time], in seconds.
+				Seeks the audio stream at the given [param time], in seconds.
 			</description>
 		</method>
 		<method name="set_sample_playback" experimental="">
@@ -131,13 +131,13 @@
 			<return type="void" />
 			<param index="0" name="from_pos" type="float" default="0.0" />
 			<description>
-				Starts the stream from the given [param from_pos], in seconds.
+				Starts playback at the given position, in seconds.
 			</description>
 		</method>
 		<method name="stop">
 			<return type="void" />
 			<description>
-				Stops the stream.
+				Stops the playback.
 			</description>
 		</method>
 	</methods>
