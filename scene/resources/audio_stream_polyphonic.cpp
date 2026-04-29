@@ -232,6 +232,7 @@ AudioStreamPlaybackPolyphonic::ID AudioStreamPlaybackPolyphonic::play_stream(con
 			streams[i].volume_db = p_volume_db;
 			streams[i].prev_volume_db = p_volume_db;
 			streams[i].pitch_scale = p_pitch_scale;
+			streams[i].bus = p_bus;
 			streams[i].id = id_counter++;
 			streams[i].finish_request.clear();
 			streams[i].pending_play.set();

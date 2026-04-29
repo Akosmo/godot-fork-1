@@ -71,6 +71,7 @@ class AudioStreamPlaybackPolyphonic : public AudioStreamPlayback {
 		Ref<AudioStreamPlayback> stream_playback;
 		float prev_volume_db = 0;
 		float volume_db = 0;
+		StringName bus;
 		uint32_t id = 0;
 
 		Stream() :
