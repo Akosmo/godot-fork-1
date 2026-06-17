@@ -180,8 +180,8 @@ void register_server_types() {
 	GDREGISTER_CLASS(AudioSamplePlayback);
 	GDREGISTER_VIRTUAL_CLASS(AudioEffect);
 	GDREGISTER_VIRTUAL_CLASS(AudioEffectInstance);
-	GDREGISTER_CLASS(AudioEffectEQ);
-	GDREGISTER_CLASS(AudioEffectFilter);
+	GDREGISTER_ABSTRACT_CLASS(AudioEffectEQ);
+	GDREGISTER_ABSTRACT_CLASS(AudioEffectFilter);
 	GDREGISTER_CLASS(AudioBusLayout);
 
 	GDREGISTER_CLASS(AudioStreamGenerator);
