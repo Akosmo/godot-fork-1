@@ -33,7 +33,7 @@
 #include "scene/main/node.h"
 #include "servers/audio/audio_server_enums.h"
 
-struct AudioFrame;
+// struct AudioFrame;
 class AudioStream;
 class AudioStreamPlayback;
 class AudioStreamPlayerInternal;
@@ -41,22 +41,13 @@ class AudioStreamPlayerInternal;
 class AudioStreamPlayer : public Node {
 	GDCLASS(AudioStreamPlayer, Node);
 
-public:
-	enum MixTarget {
-		MIX_TARGET_STEREO,
-		MIX_TARGET_SURROUND,
-		MIX_TARGET_CENTER
-	};
-
 private:
 	AudioStreamPlayerInternal *internal = nullptr;
 
-	MixTarget mix_target = MIX_TARGET_STEREO;
+	AuSE::MixTarget mix_target = AuSE::MixTarget::MIX_TARGET_STEREO;
 
 	void _set_playing(bool p_enable);
 	bool _is_active() const;
-
-	Vector<AudioFrame> _get_volume_vector();
 
 protected:
 	void _validate_property(PropertyInfo &p_property) const;
@@ -100,8 +91,8 @@ public:
 	void set_autoplay(bool p_enable);
 	bool is_autoplay_enabled() const;
 
-	void set_mix_target(MixTarget p_target);
-	MixTarget get_mix_target() const;
+	void set_mix_target(AuSE::MixTarget p_target);
+	AuSE::MixTarget get_mix_target() const;
 
 	void set_stream_paused(bool p_pause);
 	bool get_stream_paused() const;
@@ -115,5 +106,3 @@ public:
 	AudioStreamPlayer();
 	~AudioStreamPlayer();
 };
-
-VARIANT_ENUM_CAST(AudioStreamPlayer::MixTarget)

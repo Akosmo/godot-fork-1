@@ -52,16 +52,16 @@ void AudioEffectCompressorInstance::process(const AudioFrame *p_src_frames, Audi
 
 	const AudioFrame *src = p_src_frames;
 
-	if (base->sidechain != StringName() && current_channel != -1) {
+	if (base->sidechain != StringName() && current_channel_pair != -1) {
 		int bus = AudioServer::get_singleton()->thread_find_bus_index(base->sidechain);
 		if (bus >= 0) {
-			src = AudioServer::get_singleton()->thread_get_channel_mix_buffer(bus, current_channel);
+			src = AudioServer::get_singleton()->thread_get_channel_mix_buffer(bus, current_channel_pair);
 		}
 	}
 
 	for (int i = 0; i < p_frame_count; i++) {
 		AudioFrame s = src[i];
-		//convert to positive
+		// Convert to positive.
 		s.left = Math::abs(s.left);
 		s.right = Math::abs(s.right);
 
@@ -69,11 +69,11 @@ void AudioEffectCompressorInstance::process(const AudioFrame *p_src_frames, Audi
 
 		float overdb = 2.08136898f * Math::linear_to_db(peak / threshold);
 
-		if (overdb < 0.0) { //we only care about what goes over to compress
+		if (overdb < 0.0) { // We only care about what goes over to compress.
 			overdb = 0.0;
 		}
 
-		if (overdb - rundb > 5) { // diffeence is too large
+		if (overdb - rundb > 5) { // Difference is too large.
 			averatio = 4;
 		}
 
@@ -90,7 +90,7 @@ void AudioEffectCompressorInstance::process(const AudioFrame *p_src_frames, Audi
 
 		float cratio;
 
-		if (false) { //rato all-in
+		if (false) { // Ratio all-in.
 			cratio = 12 + averatio;
 		} else {
 			cratio = base->ratio;
@@ -99,7 +99,7 @@ void AudioEffectCompressorInstance::process(const AudioFrame *p_src_frames, Audi
 		float gr = -overdb * (cratio - 1) / cratio;
 		float grv = Math::db_to_linear(gr);
 
-		runmax = maxover + relcoef * (runmax - maxover); // highest peak for setting att/rel decays in reltime
+		runmax = maxover + relcoef * (runmax - maxover); // Highest peak for setting att/rel decays in real-time.
 		maxover = runmax;
 
 		if (grv < gr_meter) {
@@ -125,7 +125,7 @@ Ref<AudioEffectInstance> AudioEffectCompressor::instantiate() {
 	ins->runmax = 0;
 	ins->maxover = 0;
 	ins->gr_meter = 1.0;
-	ins->current_channel = -1;
+	ins->current_channel_pair = -1;
 	return ins;
 }
 

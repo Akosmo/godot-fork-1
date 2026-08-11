@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  audio_stream_player.cpp                                               */
+/*  audio_stream_player_backup.cpp                                        */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -28,11 +28,10 @@
 /* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
-#include "audio_stream_player.h"
-#include "audio_stream_player.compat.inc"
-
 #include "core/object/callable_mp.h"
 #include "core/object/class_db.h"
+#include "scene/audio/audio_stream_player.compat.inc"
+#include "scene/audio/audio_stream_player.h"
 #include "scene/audio/audio_stream_player_internal.h"
 #include "scene/resources/audio/audio_stream.h"
 #include "servers/audio/audio_server.h"
@@ -50,7 +49,7 @@ void AudioStreamPlayer::_notification(int p_what) {
 }
 
 void AudioStreamPlayer::set_stream(Ref<AudioStream> p_stream) {
-	internal->set_stream_internal(p_stream);
+	internal->set_stream(p_stream);
 }
 
 bool AudioStreamPlayer::_set(const StringName &p_name, const Variant &p_value) {
@@ -66,16 +65,21 @@ void AudioStreamPlayer::_get_property_list(List<PropertyInfo> *p_list) const {
 }
 
 Ref<AudioStream> AudioStreamPlayer::get_stream() const {
-	return internal->get_stream_internal();
+	return internal->stream;
 }
 
 void AudioStreamPlayer::set_volume_db(float p_volume) {
 	ERR_FAIL_COND_MSG(Math::is_nan(p_volume), "Volume can't be set to NaN.");
-	internal->set_volume_internal(p_volume);
+	internal->volume_db = p_volume;
+
+	Vector<AudioFrame> volume_vector = _get_volume_vector();
+	for (Ref<AudioStreamPlayback> &playback : internal->stream_playbacks) {
+		AudioServer::get_singleton()->set_playback_all_bus_volumes_linear(playback, volume_vector);
+	}
 }
 
 float AudioStreamPlayer::get_volume_db() const {
-	return internal->get_volume_internal();
+	return internal->volume_db;
 }
 
 void AudioStreamPlayer::set_volume_linear(float p_volume) {
@@ -87,78 +91,130 @@ float AudioStreamPlayer::get_volume_linear() const {
 }
 
 void AudioStreamPlayer::set_pitch_scale(float p_pitch_scale) {
-	internal->set_pitch_scale_internal(p_pitch_scale);
+	internal->set_pitch_scale(p_pitch_scale);
 }
 
 float AudioStreamPlayer::get_pitch_scale() const {
-	return internal->get_pitch_scale_internal();
+	return internal->pitch_scale;
 }
 
 void AudioStreamPlayer::set_max_polyphony(int p_max_polyphony) {
-	internal->set_max_voices_internal(p_max_polyphony);
+	internal->set_max_polyphony(p_max_polyphony);
 }
 
 int AudioStreamPlayer::get_max_polyphony() const {
-	return internal->get_max_voices_internal();
+	return internal->max_polyphony;
 }
 
 void AudioStreamPlayer::play(float p_from_pos) {
-	internal->play_internal();
-}
+	Ref<AudioStreamPlayback> stream_playback = internal->play_basic();
+	if (stream_playback.is_null()) {
+		return;
+	}
+	AudioServer::get_singleton()->start_playback_stream(stream_playback, internal->bus, _get_volume_vector(), p_from_pos, internal->pitch_scale);
+	internal->ensure_playback_limit();
 
-void AudioStreamPlayer::seek(float p_seconds) {
-	internal->seek_internal(p_seconds);
-}
+	// Sample handling.
+	if (stream_playback->get_is_sample() && stream_playback->get_sample_playback().is_valid()) {
+		Ref<AudioSamplePlayback> sample_playback = stream_playback->get_sample_playback();
+		sample_playback->offset = p_from_pos;
+		sample_playback->volume_vector = _get_volume_vector();
+		sample_playback->bus = get_bus();
 
-void AudioStreamPlayer::stop() {
-	internal->stop_internal();
-}
-
-bool AudioStreamPlayer::is_playing() const {
-	return internal->is_playing_internal();
-}
-
-float AudioStreamPlayer::get_playback_position() {
-	return internal->get_playback_position_internal();
-}
-
-void AudioStreamPlayer::set_bus(const StringName &p_bus) {
-	internal->set_audio_bus_internal(p_bus);
-}
-
-StringName AudioStreamPlayer::get_bus() const {
-	return internal->get_audio_bus_internal();
-}
-
-void AudioStreamPlayer::set_autoplay(bool p_enable) {
-	internal->set_autoplay_internal(p_enable);
-}
-
-bool AudioStreamPlayer::is_autoplay_enabled() const {
-	return internal->get_autoplay_internal();
-}
-
-void AudioStreamPlayer::set_mix_target(AuSE::MixTarget p_target) {
-	mix_target = p_target;
-	if (AudioServer::get_singleton()->stream_exists(internal->stream_rid)) {
-		AudioServer::get_singleton()->set_mix_target(internal->emitter_rid, p_target);
+		AudioServer::get_singleton()->start_sample_playback(sample_playback);
 	}
 }
 
-AuSE::MixTarget AudioStreamPlayer::get_mix_target() const {
+void AudioStreamPlayer::seek(float p_seconds) {
+	internal->seek(p_seconds);
+}
+
+void AudioStreamPlayer::stop() {
+	internal->stop_basic();
+}
+
+bool AudioStreamPlayer::is_playing() const {
+	return internal->is_playing();
+}
+
+float AudioStreamPlayer::get_playback_position() {
+	return internal->get_playback_position();
+}
+
+void AudioStreamPlayer::set_bus(const StringName &p_bus) {
+	internal->bus = p_bus;
+	for (const Ref<AudioStreamPlayback> &playback : internal->stream_playbacks) {
+		AudioServer::get_singleton()->set_playback_bus_exclusive(playback, p_bus, _get_volume_vector());
+	}
+}
+
+StringName AudioStreamPlayer::get_bus() const {
+	return internal->get_bus();
+}
+
+void AudioStreamPlayer::set_autoplay(bool p_enable) {
+	internal->autoplay = p_enable;
+}
+
+bool AudioStreamPlayer::is_autoplay_enabled() const {
+	return internal->autoplay;
+}
+
+void AudioStreamPlayer::set_mix_target(MixTarget p_target) {
+	mix_target = p_target;
+}
+
+AudioStreamPlayer::MixTarget AudioStreamPlayer::get_mix_target() const {
 	return mix_target;
 }
 
 void AudioStreamPlayer::_set_playing(bool p_enable) {
-	internal->set_playing_internal(p_enable);
+	internal->set_playing(p_enable);
 }
 
 void AudioStreamPlayer::set_stream_paused(bool p_pause) {
-	internal->pause_internal(p_pause);
+	internal->set_stream_paused(p_pause);
 }
 
 bool AudioStreamPlayer::get_stream_paused() const {
-	return internal->is_paused_internal();
+	return internal->get_stream_paused();
+}
+
+Vector<AudioFrame> AudioStreamPlayer::_get_volume_vector() {
+	Vector<AudioFrame> volume_vector;
+	// We need at most four stereo pairs (for 7.1 systems).
+	volume_vector.resize(4);
+
+	// Initialize the volume vector to zero.
+	for (AudioFrame &channel_volume_db : volume_vector) {
+		channel_volume_db = AudioFrame(0, 0);
+	}
+
+	float volume_linear = Math::db_to_linear(internal->volume_db);
+
+	// Set the volume vector up according to the speaker mode and mix target.
+	// TODO do we need to scale the volume down when we output to more channels?
+	if (AudioServer::get_singleton()->get_speaker_mode() == AuSE::SPEAKER_MODE_STEREO) {
+		volume_vector.write[0] = AudioFrame(volume_linear, volume_linear);
+	} else {
+		switch (mix_target) {
+			case MIX_TARGET_STEREO: {
+				volume_vector.write[0] = AudioFrame(volume_linear, volume_linear);
+			} break;
+			case MIX_TARGET_SURROUND: {
+				// TODO Make sure this is right.
+				volume_vector.write[0] = AudioFrame(volume_linear, volume_linear);
+				volume_vector.write[1] = AudioFrame(volume_linear, /* LFE= */ 1.0f);
+				volume_vector.write[2] = AudioFrame(volume_linear, volume_linear);
+				volume_vector.write[3] = AudioFrame(volume_linear, volume_linear);
+			} break;
+			case MIX_TARGET_CENTER: {
+				// TODO Make sure this is right.
+				volume_vector.write[1] = AudioFrame(volume_linear, /* LFE= */ 1.0f);
+			} break;
+		}
+	}
+	return volume_vector;
 }
 
 void AudioStreamPlayer::_validate_property(PropertyInfo &p_property) const {
@@ -166,19 +222,19 @@ void AudioStreamPlayer::_validate_property(PropertyInfo &p_property) const {
 }
 
 bool AudioStreamPlayer::has_stream_playback() {
-	return internal->has_stream_playback_internal();
+	return internal->has_stream_playback();
 }
 
 Ref<AudioStreamPlayback> AudioStreamPlayer::get_stream_playback() {
-	return internal->get_stream_playback_internal();
+	return internal->get_stream_playback();
 }
 
 AuSE::PlaybackType AudioStreamPlayer::get_playback_type() const {
-	return internal->get_playback_type_internal();
+	return internal->get_playback_type();
 }
 
 void AudioStreamPlayer::set_playback_type(AuSE::PlaybackType p_playback_type) {
-	internal->set_playback_type_internal(p_playback_type);
+	internal->set_playback_type(p_playback_type);
 }
 
 void AudioStreamPlayer::_bind_methods() {
@@ -237,10 +293,14 @@ void AudioStreamPlayer::_bind_methods() {
 	ADD_PROPERTY(PropertyInfo(Variant::INT, "playback_type", PROPERTY_HINT_ENUM, "Default,Stream,Sample"), "set_playback_type", "get_playback_type");
 
 	ADD_SIGNAL(MethodInfo("finished"));
+
+	BIND_ENUM_CONSTANT(MIX_TARGET_STEREO);
+	BIND_ENUM_CONSTANT(MIX_TARGET_SURROUND);
+	BIND_ENUM_CONSTANT(MIX_TARGET_CENTER);
 }
 
 AudioStreamPlayer::AudioStreamPlayer() {
-	internal = memnew(AudioStreamPlayerInternal(this, AuSE::EmitterType::NON_POSITIONAL, false));
+	internal = memnew(AudioStreamPlayerInternal(this, callable_mp(this, &AudioStreamPlayer::play), callable_mp(this, &AudioStreamPlayer::stop), false));
 }
 
 AudioStreamPlayer::~AudioStreamPlayer() {

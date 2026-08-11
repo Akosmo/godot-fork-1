@@ -1,5 +1,5 @@
 /**************************************************************************/
-/*  audio_stream_player_internal.cpp                                      */
+/*  audio_stream_player_internal_backup.cpp                               */
 /**************************************************************************/
 /*                         This file is part of:                          */
 /*                             GODOT ENGINE                               */
@@ -28,10 +28,9 @@
 /* SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.                 */
 /**************************************************************************/
 
-#include "audio_stream_player_internal.h"
-
 #include "core/config/engine.h"
 #include "core/object/callable_mp.h"
+#include "scene/audio/audio_stream_player_internal.h"
 #include "scene/main/node.h"
 #include "scene/main/scene_tree.h"
 #include "scene/resources/audio/audio_stream.h"
@@ -65,13 +64,13 @@ void AudioStreamPlayerInternal::_update_stream_parameters() {
 }
 
 bool AudioStreamPlayerInternal::_is_sample() {
-	return (AudioServer::get_singleton()->get_default_playback_type() == AuSE::PlaybackType::PLAYBACK_TYPE_SAMPLE && playback_type == AuSE::PlaybackType::PLAYBACK_TYPE_DEFAULT) || playback_type == AuSE::PlaybackType::PLAYBACK_TYPE_SAMPLE;
+	return (AudioServer::get_singleton()->get_default_playback_type() == AuSE::PlaybackType::PLAYBACK_TYPE_SAMPLE && get_playback_type() == AuSE::PlaybackType::PLAYBACK_TYPE_DEFAULT) || get_playback_type() == AuSE::PlaybackType::PLAYBACK_TYPE_SAMPLE;
 }
 
 void AudioStreamPlayerInternal::process() {
 	Vector<Ref<AudioStreamPlayback>> playbacks_to_remove;
 	for (Ref<AudioStreamPlayback> &playback : stream_playbacks) {
-		if (playback.is_valid() && !AudioServer::get_singleton()->has_stream_playback(stream_rid) && !AudioServer::get_singleton()->is_stream_paused(stream_rid)) {
+		if (playback.is_valid() && !AudioServer::get_singleton()->is_playback_active(playback) && !AudioServer::get_singleton()->is_playback_paused(playback)) {
 			playbacks_to_remove.push_back(playback);
 		}
 	}
@@ -81,6 +80,7 @@ void AudioStreamPlayerInternal::process() {
 	}
 	if (!playbacks_to_remove.is_empty() && stream_playbacks.is_empty()) {
 		// This node is no longer actively playing audio.
+		active.clear();
 		_set_process(false);
 	}
 	if (!playbacks_to_remove.is_empty()) {
@@ -88,17 +88,24 @@ void AudioStreamPlayerInternal::process() {
 	}
 }
 
+void AudioStreamPlayerInternal::ensure_playback_limit() {
+	while (stream_playbacks.size() > max_polyphony) {
+		AudioServer::get_singleton()->stop_playback_stream(stream_playbacks[0]);
+		stream_playbacks.remove_at(0);
+	}
+}
+
 void AudioStreamPlayerInternal::notification(int p_what) {
 	switch (p_what) {
 		case Node::NOTIFICATION_ENTER_TREE: {
 			if (autoplay && !Engine::get_singleton()->is_editor_hint()) {
-				play_internal();
+				play_callable.call(0.0);
 			}
-			pause_internal(!node->can_process());
+			set_stream_paused(!node->can_process());
 		} break;
 
 		case Node::NOTIFICATION_EXIT_TREE: {
-			pause_internal(true);
+			set_stream_paused(true);
 		} break;
 
 		case Node::NOTIFICATION_INTERNAL_PROCESS: {
@@ -106,7 +113,9 @@ void AudioStreamPlayerInternal::notification(int p_what) {
 		} break;
 
 		case Node::NOTIFICATION_PREDELETE: {
-			AudioServer::get_singleton()->stop_stream(stream_rid);
+			for (Ref<AudioStreamPlayback> &playback : stream_playbacks) {
+				AudioServer::get_singleton()->stop_playback_stream(playback);
+			}
 			stream_playbacks.clear();
 		} break;
 
@@ -115,7 +124,7 @@ void AudioStreamPlayerInternal::notification(int p_what) {
 			bool can_process = node->is_inside_tree() && node->can_process();
 			if (!can_process) {
 				// Node can't process so we start fading out to silence
-				pause_internal(true);
+				set_stream_paused(true);
 			}
 		} break;
 
@@ -127,9 +136,68 @@ void AudioStreamPlayerInternal::notification(int p_what) {
 		}
 
 		case Node::NOTIFICATION_UNPAUSED: {
-			pause_internal(false);
+			set_stream_paused(false);
 		} break;
 	}
+}
+
+Ref<AudioStreamPlayback> AudioStreamPlayerInternal::play_basic() {
+	Ref<AudioStreamPlayback> stream_playback;
+	if (stream.is_null()) {
+		return stream_playback;
+	}
+	ERR_FAIL_COND_V_MSG(!node->is_inside_tree(), stream_playback, "Playback can only happen when a node is inside the scene tree");
+	if (stream->is_monophonic() && is_playing()) {
+		stop_callable.call();
+	}
+	stream_playback = stream->instantiate_playback();
+	ERR_FAIL_COND_V_MSG(stream_playback.is_null(), stream_playback, "Failed to instantiate playback.");
+
+	for (const KeyValue<StringName, ParameterData> &K : playback_parameters) {
+		stream_playback->set_parameter(K.value.path, K.value.value);
+	}
+
+	// Sample handling.
+	if (_is_sample()) {
+		if (stream->can_be_sampled()) {
+			stream_playback->set_is_sample(true);
+			if (stream_playback->get_is_sample() && stream_playback->get_sample_playback().is_null()) {
+				if (!AudioServer::get_singleton()->is_stream_registered_as_sample(stream)) {
+					AudioServer::get_singleton()->register_stream_as_sample(stream);
+				}
+				Ref<AudioSamplePlayback> sample_playback;
+				sample_playback.instantiate();
+				sample_playback->stream = stream;
+				sample_playback->pitch_scale = pitch_scale;
+				stream_playback->set_sample_playback(sample_playback);
+			}
+		} else if (!stream->is_meta_stream()) {
+			WARN_PRINT(vformat(R"(%s is trying to play a sample from a stream that cannot be sampled.)", node->get_path()));
+		}
+	}
+
+	stream_playbacks.push_back(stream_playback);
+	active.set();
+	_set_process(true);
+	return stream_playback;
+}
+
+void AudioStreamPlayerInternal::set_stream_paused(bool p_pause) {
+	// TODO this does not have perfect recall, fix that maybe? If there are zero playbacks registered with the AudioServer, this bool isn't persisted.
+	for (Ref<AudioStreamPlayback> &playback : stream_playbacks) {
+		AudioServer::get_singleton()->set_playback_paused(playback, p_pause);
+		if (_is_sample() && playback->get_sample_playback().is_valid()) {
+			AudioServer::get_singleton()->set_sample_playback_pause(playback->get_sample_playback(), p_pause);
+		}
+	}
+}
+
+bool AudioStreamPlayerInternal::get_stream_paused() const {
+	// There's currently no way to pause some playback streams but not others. Check the first and don't bother looking at the rest.
+	if (!stream_playbacks.is_empty()) {
+		return AudioServer::get_singleton()->is_playback_paused(stream_playbacks[0]);
+	}
+	return false;
 }
 
 void AudioStreamPlayerInternal::validate_property(PropertyInfo &p_property) const {
@@ -190,195 +258,113 @@ void AudioStreamPlayerInternal::get_property_list(List<PropertyInfo> *p_list) co
 	}
 }
 
-void AudioStreamPlayerInternal::set_stream_internal(const Ref<AudioStream> &p_stream) {
+void AudioStreamPlayerInternal::set_stream(Ref<AudioStream> p_stream) {
 	if (stream.is_valid()) {
 		stream->disconnect(SNAME("parameter_list_changed"), callable_mp(this, &AudioStreamPlayerInternal::_update_stream_parameters));
 	}
-	if (AudioServer::get_singleton()->is_stream_active(stream_rid)) {
-		AudioServer::get_singleton()->stop_stream(stream_rid);
-	}
-	AudioServer::get_singleton()->clear_streams(emitter_rid);
-
+	stop_callable.call();
 	stream = p_stream;
-	if (!p_stream.is_null()) {
-		stream_rid = AudioServer::get_singleton()->add_stream(emitter_rid, p_stream);
-		AudioServer::get_singleton()->set_stream_volume(stream_rid, volume_db);
-		AudioServer::get_singleton()->set_stream_pitch_scale(stream_rid, pitch_scale);
-		if (audio_bus_rid.is_valid()) {
-			AudioServer::get_singleton()->set_stream_audio_bus(stream_rid, audio_bus_rid);
-		}
-	}
-
 	_update_stream_parameters();
-
 	if (stream.is_valid()) {
 		stream->connect(SNAME("parameter_list_changed"), callable_mp(this, &AudioStreamPlayerInternal::_update_stream_parameters));
 	}
 	node->notify_property_list_changed();
 }
 
-Ref<AudioStream> AudioStreamPlayerInternal::get_stream_internal() const {
-	ERR_FAIL_NULL_V(stream, Ref<AudioStream>());
-
-	return stream;
-}
-
-void AudioStreamPlayerInternal::set_volume_internal(float p_volume) {
-	ERR_FAIL_COND(Math::is_nan(p_volume)); // TODO: Replace with range.
-
-	volume_db = p_volume;
-	if (AudioServer::get_singleton()->stream_exists(stream_rid)) {
-		AudioServer::get_singleton()->set_stream_volume(stream_rid, p_volume);
+void AudioStreamPlayerInternal::seek(float p_seconds) {
+	if (is_playing()) {
+		stop_callable.call();
+		play_callable.call(p_seconds);
 	}
 }
 
-float AudioStreamPlayerInternal::get_volume_internal() const {
-	return volume_db;
-}
-
-void AudioStreamPlayerInternal::set_pitch_scale_internal(float p_scale) {
-	ERR_FAIL_COND(p_scale <= 0.0); // TODO: Consider adding upper bound.
-
-	pitch_scale = p_scale;
-	if (AudioServer::get_singleton()->stream_exists(stream_rid)) {
-		AudioServer::get_singleton()->set_stream_pitch_scale(stream_rid, p_scale);
+void AudioStreamPlayerInternal::stop_basic() {
+	for (Ref<AudioStreamPlayback> &playback : stream_playbacks) {
+		AudioServer::get_singleton()->stop_playback_stream(playback);
 	}
+	stream_playbacks.clear();
+
+	active.clear();
+	_set_process(false);
 }
 
-float AudioStreamPlayerInternal::get_pitch_scale_internal() const {
-	return pitch_scale;
-}
-
-void AudioStreamPlayerInternal::play_internal(float p_time) {
-	ERR_FAIL_COND(Math::is_nan(p_time));
-
-	if (AudioServer::get_singleton()->stream_exists(stream_rid)) {
-		AudioServer::get_singleton()->play_stream(stream_rid, p_time);
-		stream_playbacks.push_back(AudioServer::get_singleton()->get_stream_playback(stream_rid));
-		_set_process(true);
+bool AudioStreamPlayerInternal::is_playing() const {
+	for (const Ref<AudioStreamPlayback> &playback : stream_playbacks) {
+		if (AudioServer::get_singleton()->is_playback_active(playback)) {
+			return true;
+		}
 	}
-}
-
-void AudioStreamPlayerInternal::set_playing_internal(bool p_enable) {
-	if (p_enable) {
-		play_internal();
-	} else {
-		stop_internal();
-	}
-}
-
-bool AudioStreamPlayerInternal::is_playing_internal() const {
-	if (AudioServer::get_singleton()->stream_exists(stream_rid)) {
-		AudioServer::get_singleton()->has_stream_playback(stream_rid);
-	}
-}
-
-void AudioStreamPlayerInternal::set_autoplay_internal(bool p_autoplay) {
-	autoplay = p_autoplay;
-}
-
-bool AudioStreamPlayerInternal::get_autoplay_internal() const {
-	return autoplay;
-}
-
-void AudioStreamPlayerInternal::seek_internal(float p_time) {
-	ERR_FAIL_COND(Math::is_nan(p_time));
-
-	if (AudioServer::get_singleton()->stream_exists(stream_rid)) {
-		AudioServer::get_singleton()->seek_stream(stream_rid, p_time);
-	}
-}
-
-float AudioStreamPlayerInternal::get_playback_position_internal() const {
-	if (AudioServer::get_singleton()->stream_exists(stream_rid)) {
-		return AudioServer::get_singleton()->get_stream_playback_position(stream_rid);
-	}
-
-	return 0.0;
-}
-
-void AudioStreamPlayerInternal::pause_internal(bool p_pause) {
-	if (AudioServer::get_singleton()->stream_exists(stream_rid)) {
-		stream_paused = p_pause;
-		AudioServer::get_singleton()->pause_stream(stream_rid, p_pause);
-	}
-}
-
-bool AudioStreamPlayerInternal::is_paused_internal() const {
-	if (AudioServer::get_singleton()->stream_exists(stream_rid)) {
-		return AudioServer::get_singleton()->is_stream_paused(stream_rid);
-	}
-
 	return false;
 }
 
-void AudioStreamPlayerInternal::stop_internal() {
-	if (AudioServer::get_singleton()->stream_exists(stream_rid)) {
-		AudioServer::get_singleton()->stop_stream(stream_rid);
-		stream_playbacks.clear();
-		_set_process(false);
+float AudioStreamPlayerInternal::get_playback_position() {
+	// Return the playback position of the most recently started playback stream.
+	if (!stream_playbacks.is_empty()) {
+		return AudioServer::get_singleton()->get_playback_position(stream_playbacks[stream_playbacks.size() - 1]);
+	}
+	return 0;
+}
+
+void AudioStreamPlayerInternal::set_playing(bool p_enable) {
+	if (p_enable) {
+		play_callable.call(0.0);
+	} else {
+		stop_callable.call();
 	}
 }
 
-void AudioStreamPlayerInternal::set_max_voices_internal(int p_voices) {
-	ERR_FAIL_COND(p_voices < 1 || p_voices > 128);
+bool AudioStreamPlayerInternal::is_active() const {
+	return active.is_set();
+}
 
-	max_voices = p_voices;
-	if (AudioServer::get_singleton()->stream_exists(stream_rid)) {
-		AudioServer::get_singleton()->set_max_voices(emitter_rid, p_voices);
+void AudioStreamPlayerInternal::set_pitch_scale(float p_pitch_scale) {
+	ERR_FAIL_COND(p_pitch_scale <= 0.0);
+	pitch_scale = p_pitch_scale;
+
+	for (Ref<AudioStreamPlayback> &playback : stream_playbacks) {
+		AudioServer::get_singleton()->set_playback_pitch_scale(playback, pitch_scale);
 	}
 }
 
-int AudioStreamPlayerInternal::get_max_voices_internal() const {
-	return max_voices;
-}
-
-void AudioStreamPlayerInternal::set_audio_bus_internal(const StringName &p_bus) {
-	audio_bus_name = p_bus;
-	if (AudioServer::get_singleton()->stream_exists(stream_rid)) {
-		audio_bus_rid = AudioServer::get_singleton()->get_audio_bus_rid_by_name(p_bus);
-		AudioServer::get_singleton()->set_stream_audio_bus(stream_rid, audio_bus_rid);
+void AudioStreamPlayerInternal::set_max_polyphony(int p_max_polyphony) {
+	if (p_max_polyphony > 0) {
+		max_polyphony = p_max_polyphony;
 	}
 }
 
-StringName AudioStreamPlayerInternal::get_audio_bus_internal() const {
-	return audio_bus_name;
+bool AudioStreamPlayerInternal::has_stream_playback() {
+	return !stream_playbacks.is_empty();
 }
 
-void AudioStreamPlayerInternal::set_playback_type_internal(AuSE::PlaybackType p_type) {
-	playback_type = p_type;
-	if (AudioServer::get_singleton()->stream_exists(stream_rid)) {
-		AudioServer::get_singleton()->set_emitter_playback_type(emitter_rid, p_type);
-	}
+Ref<AudioStreamPlayback> AudioStreamPlayerInternal::get_stream_playback() {
+	ERR_FAIL_COND_V_MSG(stream_playbacks.is_empty(), Ref<AudioStreamPlayback>(), "Player is inactive. Call play() before requesting get_stream_playback().");
+	return stream_playbacks[stream_playbacks.size() - 1];
 }
 
-AuSE::PlaybackType AudioStreamPlayerInternal::get_playback_type_internal() const {
+void AudioStreamPlayerInternal::set_playback_type(AuSE::PlaybackType p_playback_type) {
+	playback_type = p_playback_type;
+}
+
+AuSE::PlaybackType AudioStreamPlayerInternal::get_playback_type() const {
 	return playback_type;
 }
 
-bool AudioStreamPlayerInternal::has_stream_playback_internal() const {
-	if (AudioServer::get_singleton()->stream_exists(stream_rid)) {
-		return AudioServer::get_singleton()->has_stream_playback(stream_rid);
+StringName AudioStreamPlayerInternal::get_bus() const {
+	const String bus_name = bus;
+	for (int i = 0; i < AudioServer::get_singleton()->get_bus_count(); i++) {
+		if (AudioServer::get_singleton()->get_bus_name(i) == bus_name) {
+			return bus;
+		}
 	}
-
-	return false;
+	return SceneStringName(Master);
 }
 
-Ref<AudioStreamPlayback> AudioStreamPlayerInternal::get_stream_playback_internal() const {
-	if (AudioServer::get_singleton()->stream_exists(stream_rid)) {
-		return AudioServer::get_singleton()->get_stream_playback(stream_rid);
-	}
-
-	return Ref<AudioStreamPlayback>();
-}
-
-AudioStreamPlayerInternal::AudioStreamPlayerInternal(Node *p_node, AuSE::EmitterType p_emitter_type, bool p_physical) {
+AudioStreamPlayerInternal::AudioStreamPlayerInternal(Node *p_node, const Callable &p_play_callable, const Callable &p_stop_callable, bool p_physical) {
 	node = p_node;
+	play_callable = p_play_callable;
+	stop_callable = p_stop_callable;
 	physical = p_physical;
-	audio_bus_name = SceneStringName(Master);
-
-	emitter_rid = AudioServer::get_singleton()->create_emitter(p_emitter_type);
-	AudioServer::get_singleton()->set_polyphony_mode(emitter_rid, AuSE::PolyphonyMode::STOP_OLDEST);
+	bus = SceneStringName(Master);
 
 	AudioServer::get_singleton()->connect("bus_layout_changed", callable_mp((Object *)node, &Object::notify_property_list_changed));
 	AudioServer::get_singleton()->connect("bus_renamed", callable_mp((Object *)node, &Object::notify_property_list_changed).unbind(3));
