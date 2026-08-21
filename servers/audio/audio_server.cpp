@@ -1472,6 +1472,15 @@ Error AudioServer::remove_audio_bus(RID p_bus) {
 	return Error::OK;
 }
 
+bool AudioServer::audio_bus_exists(RID p_bus) const {
+	ERR_FAIL_COND_V(p_bus.is_null() || !p_bus.is_valid(), false);
+
+	AuST::AudioBus *audio_bus = audio_bus_owner.get_or_null(p_bus);
+	ERR_FAIL_NULL_V(audio_bus, false);
+
+	return true;
+}
+
 Error AudioServer::move_audio_bus(RID p_bus, int p_to_index) {
 	ERR_FAIL_COND_V(p_bus.is_null() || !p_bus.is_valid(), Error::ERR_INVALID_PARAMETER);
 	ERR_FAIL_COND_V(p_to_index < -1 || p_to_index > audio_buses.size(), Error::ERR_INVALID_PARAMETER);
@@ -1495,15 +1504,6 @@ Error AudioServer::move_audio_bus(RID p_bus, int p_to_index) {
 	emit_signal(SNAME("bus_layout_changed"));
 
 	return Error::OK;
-}
-
-bool AudioServer::audio_bus_exists(RID p_bus) const {
-	ERR_FAIL_COND_V(p_bus.is_null() || !p_bus.is_valid(), false);
-
-	AuST::AudioBus *audio_bus = audio_bus_owner.get_or_null(p_bus);
-	ERR_FAIL_NULL_V(audio_bus, false);
-
-	return true;
 }
 
 int AudioServer::get_audio_bus_count() const {

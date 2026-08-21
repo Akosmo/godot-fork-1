@@ -152,7 +152,6 @@ public:
 	// TODO: Rename all methods.
 	// TODO: Figure out how index will be used for audio buses. Ideally, index shouldn't matter in this new framework, but compat must remain unbroken.
 	// TODO: Add method for swapping buses, and method for moving effects.
-	// TODO: Consider adding method to get bus RID by name.
 
 	// Emitter
 
@@ -211,8 +210,8 @@ public:
 	Error remove_listener(RID p_listener);
 	bool listener_exists(RID p_listener) const;
 	AuSE::ListenerType get_listener_type(RID p_listener) const;
-	Error set_active(RID p_listener, bool p_active);
-	bool is_active(RID p_listener) const;
+	Error listener_set_active(RID p_listener, bool p_active);
+	bool listener_is_active(RID p_listener) const;
 	Error listener_update_position(RID p_listener, Variant p_position);
 	Error set_listener_doppler_tracking(RID p_listener, AuSE::DopplerTracking p_doppler_tracking);
 	AuSE::DopplerTracking get_listener_doppler_tracking(RID p_listener) const;
@@ -242,8 +241,8 @@ public:
 
 	RID add_audio_bus(int p_index = -1);
 	Error remove_audio_bus(RID p_bus);
-	Error move_audio_bus(RID p_bus, int p_to_index);
 	bool audio_bus_exists(RID p_bus) const;
+	Error move_audio_bus(RID p_bus, int p_to_index);
 	int get_audio_bus_count() const;
 	RID get_audio_bus_rid(int p_index) const;
 	RID get_audio_bus_rid_by_name(const String &p_name) const;
